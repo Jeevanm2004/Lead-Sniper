@@ -1,0 +1,12 @@
+# Environment & secrets
+.env
+
+# Editor settings
+.vscode/
+
+# Python cache
+__pycache__/
+*.pyc
+
+# Operating system files
+.DS_Store
