@@ -1,0 +1,372 @@
+{
+  "name": "Lead Sniper - High-Value GitHub Lead Tracker",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "1",
+      "name": "When clicking \u2018Test workflow\u2019",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "2",
+      "name": "Schedule Trigger (Every 15m)",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        480
+      ]
+    },
+    {
+      "parameters": {
+        "values": {
+          "string": [
+            {
+              "name": "REPO_OWNER",
+              "value": "your-github-username"
+            },
+            {
+              "name": "REPO_NAME",
+              "value": "lead-sniper-test"
+            },
+            {
+              "name": "GITHUB_TOKEN",
+              "value": ""
+            },
+            {
+              "name": "GEMINI_API_KEY",
+              "value": ""
+            },
+            {
+              "name": "DISCORD_WEBHOOK_URL",
+              "value": ""
+            }
+          ],
+          "number": [
+            {
+              "name": "MIN_FOLLOWERS",
+              "value": 100
+            },
+            {
+              "name": "MIN_PUBLIC_REPOS",
+              "value": 50
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3",
+      "name": "Config & Credentials",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        480,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/repos/{{ $json.REPO_OWNER }}/{{ $json.REPO_NAME }}/events?per_page=100",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github.v3.star+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "LeadSniper-Bot/1.0"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $json.GITHUB_TOKEN ? 'Bearer ' + $json.GITHUB_TOKEN : '' }}"
+            }
+          ]
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1000
+        }
+      },
+      "id": "4",
+      "name": "Fetch Stargazers",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        720,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse real-time GitHub events stream for WatchEvents (Stars) with deduplication\nconst items = $input.all();\nconst config = $('Config & Credentials').first().json;\nconst staticData = $getWorkflowStaticData('global');\nconst lastProcessedTime = staticData.lastStarredAt ? new Date(staticData.lastStarredAt) : null;\n\nlet stars = [];\n\nfor (const item of items) {\n  const data = Array.isArray(item.json) ? item.json : (item.json.data || [item.json]);\n  for (const entry of data) {\n    if (entry.type === 'WatchEvent') {\n      stars.push({\n        username: entry.actor.login,\n        user_id: entry.actor.id,\n        avatar_url: entry.actor.avatar_url,\n        starred_at: entry.created_at\n      });\n    } else if (entry.user && entry.starred_at) {\n      stars.push({\n        username: entry.user.login,\n        user_id: entry.user.id,\n        avatar_url: entry.user.avatar_url,\n        starred_at: entry.starred_at\n      });\n    }\n  }\n}\n\nif (stars.length === 0) {\n  return [];\n}\n\n// Sort chronological\nstars.sort((a, b) => new Date(a.starred_at) - new Date(b.starred_at));\n\nconst newLeads = [];\nlet maxStarredAt = lastProcessedTime;\n\nfor (const star of stars) {\n  const starDate = new Date(star.starred_at);\n  if (!lastProcessedTime || starDate > lastProcessedTime) {\n    newLeads.push({\n      json: {\n        username: star.username,\n        user_id: star.user_id,\n        avatar_url: star.avatar_url,\n        starred_at: star.starred_at,\n        repo: config.REPO_OWNER + '/' + config.REPO_NAME\n      }\n    });\n    if (!maxStarredAt || starDate > maxStarredAt) {\n      maxStarredAt = starDate;\n    }\n  }\n}\n\nif (maxStarredAt) {\n  staticData.lastStarredAt = maxStarredAt.toISOString();\n}\n\n// Fallback for immediate test execution if all events were already marked seen\nif (newLeads.length === 0 && stars.length > 0) {\n  const latest = stars[stars.length - 1];\n  return [{\n    json: {\n      username: latest.username,\n      user_id: latest.user_id,\n      avatar_url: latest.avatar_url,\n      starred_at: latest.starred_at,\n      repo: config.REPO_OWNER + '/' + config.REPO_NAME,\n      is_test_replay: true\n    }\n  }];\n}\n\nreturn newLeads;\n"
+      },
+      "id": "5",
+      "name": "Parse & Deduplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        960,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.github.com/users/{{ $json.username }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/vnd.github+json"
+            },
+            {
+              "name": "User-Agent",
+              "value": "LeadSniper-Bot/1.0"
+            },
+            {
+              "name": "Authorization",
+              "value": "={{ $('Config & Credentials').first().json.GITHUB_TOKEN ? 'Bearer ' + $('Config & Credentials').first().json.GITHUB_TOKEN : '' }}"
+            }
+          ]
+        },
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 3,
+          "waitBetweenTries": 1500
+        }
+      },
+      "id": "6",
+      "name": "Enrich User Profile",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1200,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-followers",
+              "leftValue": "={{ $json.followers }}",
+              "rightValue": "={{ $('Config & Credentials').first().json.MIN_FOLLOWERS }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            },
+            {
+              "id": "cond-repos",
+              "leftValue": "={{ $json.public_repos }}",
+              "rightValue": "={{ $('Config & Credentials').first().json.MIN_PUBLIC_REPOS }}",
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "or"
+        }
+      },
+      "id": "7",
+      "name": "Filter: High-Value Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        380
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={{ $('Config & Credentials').first().json.GEMINI_API_KEY }}",
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={\n  \"contents\": [\n    {\n      \"parts\": [\n        {\n          \"text\": \"You are a professional B2B Sales Development Representative (SDR) and Developer Advocate.\\nA high-value developer just starred our GitHub repository ('{{ $('Config & Credentials').first().json.REPO_NAME }}').\\nHere is their profile:\\n- Name: {{ $json.name || $json.login }}\\n- Username: @{{ $json.login }}\\n- Company: {{ $json.company || 'Independent / Not specified' }}\\n- Bio: {{ $json.bio || 'No bio provided' }}\\n- Location: {{ $json.location || 'Unknown' }}\\n- Followers: {{ $json.followers }}\\n- Public Repos: {{ $json.public_repos }}\\n\\nTask: Generate exactly ONE crisp, persuasive, and personalized sales pitch sentence explaining specifically why our team should reach out to them based on their background/company.\\nRules: Keep it strictly 1 sentence, under 30 words, professional, and do not use quotation marks or introductory filler phrases.\"\n        }\n      ]\n    }\n  ],\n  \"generationConfig\": {\n    \"temperature\": 0.7,\n    \"maxOutputTokens\": 1000\n  }\n}",
+        "options": {
+          "retryOnFail": true,
+          "maxTries": 2
+        }
+      },
+      "id": "8",
+      "name": "Gemini AI: Sales Pitch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1700,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Combine enriched profile data with the generated Gemini sales pitch\nconst profile = $('Filter: High-Value Lead?').first().json;\nconst geminiResponse = $input.first().json;\nconst config = $('Config & Credentials').first().json;\n\nlet pitch = 'High-potential lead with strong open-source presence; ideal candidate for developer partnership.';\n\ntry {\n  const candidateText = geminiResponse.candidates?.[0]?.content?.parts?.[0]?.text;\n  if (candidateText) {\n    pitch = candidateText.trim().replace(/^[\\\"']|[\\\"']$/g, '');\n  }\n} catch (err) {\n  // Keep fallback pitch\n}\n\n// Format payload as rich Discord embed\nconst discordPayload = {\n  username: 'Lead Sniper Bot',\n  avatar_url: 'https://github.githubassets.com/images/modules/logos_page/GitHub-Mark.png',\n  embeds: [\n    {\n      title: '\ud83c\udfaf High-Value Lead Detected: ' + (profile.name || profile.login),\n      url: profile.html_url,\n      color: 5763719,\n      thumbnail: {\n        url: profile.avatar_url\n      },\n      fields: [\n        {\n          name: '\ud83d\udc64 User',\n          value: '[**' + (profile.name || profile.login) + '** (@' + profile.login + ')](' + profile.html_url + ')',\n          inline: true\n        },\n        {\n          name: '\ud83c\udfe2 Company',\n          value: profile.company || 'Not specified',\n          inline: true\n        },\n        {\n          name: '\ud83d\udccd Location',\n          value: profile.location || 'Not specified',\n          inline: true\n        },\n        {\n          name: '\ud83d\udc65 Followers',\n          value: '**' + (profile.followers || 0).toLocaleString() + '**',\n          inline: true\n        },\n        {\n          name: '\ud83d\udce6 Public Repos',\n          value: '**' + (profile.public_repos || 0).toLocaleString() + '**',\n          inline: true\n        },\n        {\n          name: '\u2b50 Starred Repo',\n          value: '`' + config.REPO_OWNER + '/' + config.REPO_NAME + '`',\n          inline: true\n        },\n        {\n          name: '\ud83d\udcdd Bio',\n          value: profile.bio ? ('*\"' + profile.bio + '\"*') : '_No bio provided._',\n          inline: false\n        },\n        {\n          name: '\ud83d\udca1 AI Sales Pitch',\n          value: '>>> **' + pitch + '**',\n          inline: false\n        }\n      ],\n      footer: {\n        text: 'Lead Sniper \u2022 GitHub Ingestion & Enrichment Pipeline'\n      },\n      timestamp: new Date().toISOString()\n    }\n  ]\n};\n\nreturn [{\n  json: {\n    discord_payload: discordPayload,\n    lead_login: profile.login,\n    lead_name: profile.name,\n    sales_pitch: pitch\n  }\n}];\n"
+      },
+      "id": "9",
+      "name": "Format Discord Embed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1960,
+        280
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config & Credentials').first().json.DISCORD_WEBHOOK_URL }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "User-Agent",
+              "value": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "body": "={{ JSON.stringify($json.discord_payload) }}",
+        "options": {}
+      },
+      "id": "10",
+      "name": "Send Discord Alert",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        2220,
+        280
+      ]
+    }
+  ],
+  "connections": {
+    "When clicking \u2018Test workflow\u2019": {
+      "main": [
+        [
+          {
+            "node": "Config & Credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger (Every 15m)": {
+      "main": [
+        [
+          {
+            "node": "Config & Credentials",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config & Credentials": {
+      "main": [
+        [
+          {
+            "node": "Fetch Stargazers",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Stargazers": {
+      "main": [
+        [
+          {
+            "node": "Parse & Deduplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse & Deduplicate": {
+      "main": [
+        [
+          {
+            "node": "Enrich User Profile",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enrich User Profile": {
+      "main": [
+        [
+          {
+            "node": "Filter: High-Value Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter: High-Value Lead?": {
+      "main": [
+        [
+          {
+            "node": "Gemini AI: Sales Pitch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        []
+      ]
+    },
+    "Gemini AI: Sales Pitch": {
+      "main": [
+        [
+          {
+            "node": "Format Discord Embed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Discord Embed": {
+      "main": [
+        [
+          {
+            "node": "Send Discord Alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
